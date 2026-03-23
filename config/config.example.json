@@ -1,0 +1,42 @@
+{
+  "identity": {
+    "connector_id": "customer-vpc-connector-01",
+    "connector_name": "OpenClaw Customer Connector",
+    "customer_id": "customer-001",
+    "site_id": "site-primary",
+    "metadata": {
+      "environment": "customer-vpc",
+      "note": "Adjust values before first start"
+    }
+  },
+  "control_plane": {
+    "base_url": "https://your-control-plane.example.com",
+    "api_key": "REPLACE_WITH_CONNECTOR_API_KEY",
+    "api_key_header": "X-API-Key",
+    "heartbeat_url": "https://your-control-plane.example.com/api/v1/connectors/heartbeat",
+    "job_pull_url": "https://your-control-plane.example.com/api/v1/connectors/jobs/pull",
+    "verify_ssl": true,
+    "request_timeout_seconds": 30,
+    "extra_headers": {}
+  },
+  "polling": {
+    "heartbeat_interval_seconds": 30,
+    "job_poll_interval_seconds": 5,
+    "idle_sleep_seconds": 2,
+    "error_backoff_seconds": 10
+  },
+  "logging": {
+    "level": "INFO",
+    "file_path": "logs/connector.log",
+    "max_bytes": 5000000,
+    "backup_count": 5
+  },
+  "capabilities": {
+    "supported_modes": ["ssh", "winrm"],
+    "supported_os": ["linux", "windows"]
+  },
+  "runtime": {
+    "max_concurrent_jobs": 1,
+    "default_shell_prefix_windows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command"
+  }
+}

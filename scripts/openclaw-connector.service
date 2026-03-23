@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenClaw Customer Connector
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/openclaw-customer-connector
+Environment=CONNECTOR_CONFIG_PATH=/opt/openclaw-customer-connector/config/config.json
+ExecStart=/opt/openclaw-customer-connector/.venv/bin/python /opt/openclaw-customer-connector/app/main.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
