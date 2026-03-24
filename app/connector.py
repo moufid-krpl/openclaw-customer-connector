@@ -27,6 +27,14 @@ from app.winrm_client import execute_winrm_command
 logger = logging.getLogger(__name__)
 
 
+def _preview_text(value: str, limit: int = 4000) -> str:
+    if not value:
+        return ""
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "\n...[truncated]"
+
+
 class ConnectorService:
     def __init__(self, settings: ConnectorSettings) -> None:
         self.settings = settings
@@ -88,19 +96,57 @@ class ConnectorService:
             os_type=request.target.os_type,
         )
 
+        logger.info(
+            "Executing job %s | tenant=%s | mode=%s | host=%s | port=%s | user=%s",
+            request.command_id,
+            request.tenant_id,
+            request.target.mode.value,
+            request.target.host,
+            target_meta.port,
+            request.target.username,
+        )
+        logger.info("Command for job %s:\n%s", request.command_id, request.command)
+
         def progress_callback(payload: dict) -> tuple[bool, str | None]:
             ok, error_text = try_post_callback_sync(request.callback, payload)
             return ok, error_text
 
         try:
             if request.target.mode.value == "ssh":
-                result = execute_ssh_command(request, runner_job_id, progress_callback if request.progress_updates_enabled else None)
+                result = execute_ssh_command(
+                    request,
+                    runner_job_id,
+                    progress_callback if request.progress_updates_enabled else None,
+                )
             else:
-                result = execute_winrm_command(request, runner_job_id, progress_callback if request.progress_updates_enabled else None)
+                result = execute_winrm_command(
+                    request,
+                    runner_job_id,
+                    progress_callback if request.progress_updates_enabled else None,
+                )
 
             final_status = "completed"
             if request.treat_nonzero_exit_code_as_error and result.exit_code != 0:
                 final_status = "error"
+
+            final_stdout = result.stdout or ""
+            final_stderr = result.stderr or ""
+
+            if final_status == "error" and not final_stderr.strip():
+                final_stderr = f"Remote command finished with exit code {result.exit_code}, but no stderr output was captured."
+
+            logger.info(
+                "Job finished %s | status=%s | exit_code=%s | stdout_len=%s | stderr_len=%s",
+                request.command_id,
+                final_status,
+                result.exit_code,
+                len(final_stdout),
+                len(final_stderr),
+            )
+            if final_stdout:
+                logger.info("STDOUT for %s:\n%s", request.command_id, _preview_text(final_stdout))
+            if final_stderr:
+                logger.info("STDERR for %s:\n%s", request.command_id, _preview_text(final_stderr))
 
             payload = RemoteCallbackPayload(
                 tenant_id=request.tenant_id,
@@ -110,8 +156,8 @@ class ConnectorService:
                 status=final_status,
                 sequence=result.sequence + 1,
                 console_snapshot=result.console_snapshot,
-                stdout=result.stdout,
-                stderr=result.stderr,
+                stdout=final_stdout,
+                stderr=final_stderr,
                 exit_code=result.exit_code,
                 output_truncated=result.output_truncated,
                 callback_delivery=CallbackDeliveryInfo(
@@ -128,14 +174,35 @@ class ConnectorService:
             if not ok:
                 logger.error("Final callback failed for %s: %s", request.command_id, final_error)
             self.set_state(status="idle", current_job_id=None, current_mode=None, last_error=None)
+
         except Exception as exc:  # noqa: BLE001
-            classified = classify_exception(exc, phase="execute", debug_context={
-                "connector_id": self.settings.identity.connector_id,
-                "mode": request.target.mode.value,
-                "host": request.target.host,
-                "port": request.target.port,
-            })
-            logger.exception("Job execution failed: %s", exc)
+            classified = classify_exception(
+                exc,
+                phase="execute",
+                debug_context={
+                    "connector_id": self.settings.identity.connector_id,
+                    "mode": request.target.mode.value,
+                    "host": request.target.host,
+                    "port": request.target.port,
+                    "command": request.command,
+                },
+            )
+            logger.exception("Job execution failed for %s: %s", request.command_id, exc)
+
+            error_stdout = ""
+            error_stderr = classified.detail or classified.message or str(exc)
+            error_console = error_stderr
+
+            logger.error(
+                "Job failed %s | message=%s | detail=%s",
+                request.command_id,
+                classified.message,
+                classified.detail,
+            )
+            logger.info("Failed command for %s:\n%s", request.command_id, request.command)
+            if error_stderr:
+                logger.info("ERROR/STDERR for %s:\n%s", request.command_id, _preview_text(error_stderr))
+
             error_payload = RemoteCallbackPayload(
                 tenant_id=request.tenant_id,
                 command_id=request.command_id,
@@ -143,6 +210,10 @@ class ConnectorService:
                 event_type=CallbackEventType.final,
                 status="error",
                 sequence=1,
+                console_snapshot=error_console,
+                stdout=error_stdout,
+                stderr=error_stderr,
+                exit_code=1,
                 error=build_error_info(request, classified),
                 callback_delivery=CallbackDeliveryInfo(ok=True, attempt_count=1),
                 target=target_meta,
@@ -153,6 +224,7 @@ class ConnectorService:
             ok, final_error = try_post_callback_sync(request.callback, error_payload.model_dump(mode="json"))
             if not ok:
                 logger.error("Error callback failed for %s: %s", request.command_id, final_error)
+
             self.set_state(status="error", current_job_id=None, current_mode=None, last_error=classified.message)
             time.sleep(1)
             self.set_state(status="idle", current_job_id=None, current_mode=None, last_error=classified.message)
@@ -168,12 +240,21 @@ class ConnectorService:
                 if self.status == "running":
                     time.sleep(self.settings.polling.idle_sleep_seconds)
                     continue
+
                 job = self.control_plane.pull_job()
                 if not job:
                     time.sleep(self.settings.polling.job_poll_interval_seconds)
                     continue
-                logger.info("Received job %s for tenant %s in mode %s", job.command_id, job.tenant_id, job.target.mode.value)
+
+                logger.info(
+                    "Received job %s for tenant %s in mode %s",
+                    job.command_id,
+                    job.tenant_id,
+                    job.target.mode.value,
+                )
+                logger.info("Pulled command %s:\n%s", job.command_id, job.command)
                 self.execute_job(job)
+
             except KeyboardInterrupt:
                 break
             except Exception as exc:  # noqa: BLE001

@@ -51,6 +51,10 @@ class CapabilityConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     max_concurrent_jobs: int = 1
     default_shell_prefix_windows: str = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command"
+    runner_max_output_chars: int = 200000
+    runner_callback_timeout_seconds: int = 20
+    runner_callback_max_retries: int = 3
+    runner_verify_ssl: bool = True
 
 
 class ConnectorSettings(BaseModel):

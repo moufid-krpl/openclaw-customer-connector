@@ -37,6 +37,10 @@
   },
   "runtime": {
     "max_concurrent_jobs": 1,
-    "default_shell_prefix_windows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command"
+    "default_shell_prefix_windows": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command",
+    "runner_max_output_chars": 200000,
+    "runner_callback_timeout_seconds": 20,
+    "runner_callback_max_retries": 3,
+    "runner_verify_ssl": true
   }
 }

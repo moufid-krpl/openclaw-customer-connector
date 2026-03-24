@@ -20,16 +20,33 @@ def _build_headers(callback: CallbackConfig) -> dict[str, str]:
     return headers
 
 
+def _format_http_error(exc: httpx.HTTPStatusError) -> str:
+    response_text = ""
+    try:
+        response_text = exc.response.text
+    except Exception:
+        response_text = "<no response body>"
+    return f"{exc} | response_body={response_text}"
+
+
 async def post_callback(callback: CallbackConfig, payload: dict[str, Any]) -> None:
     headers = _build_headers(callback)
     last_error: Exception | None = None
 
     for attempt in range(1, runtime_settings.runner_callback_max_retries + 1):
         try:
-            async with httpx.AsyncClient(timeout=runtime_settings.runner_callback_timeout_seconds, verify=runtime_settings.runner_verify_ssl) as client:
+            async with httpx.AsyncClient(
+                timeout=runtime_settings.runner_callback_timeout_seconds,
+                verify=runtime_settings.runner_verify_ssl,
+            ) as client:
                 response = await client.post(callback.url, json=payload, headers=headers)
                 response.raise_for_status()
                 return
+        except httpx.HTTPStatusError as exc:
+            last_error = exc
+            logger.warning("Async callback attempt %s failed: %s", attempt, _format_http_error(exc))
+            if attempt < runtime_settings.runner_callback_max_retries:
+                await asyncio.sleep(min(attempt * 2, 10))
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             logger.warning("Async callback attempt %s failed: %s", attempt, exc)
@@ -46,10 +63,18 @@ def post_callback_sync(callback: CallbackConfig, payload: dict[str, Any]) -> Non
 
     for attempt in range(1, runtime_settings.runner_callback_max_retries + 1):
         try:
-            with httpx.Client(timeout=runtime_settings.runner_callback_timeout_seconds, verify=runtime_settings.runner_verify_ssl) as client:
+            with httpx.Client(
+                timeout=runtime_settings.runner_callback_timeout_seconds,
+                verify=runtime_settings.runner_verify_ssl,
+            ) as client:
                 response = client.post(callback.url, json=payload, headers=headers)
                 response.raise_for_status()
                 return
+        except httpx.HTTPStatusError as exc:
+            last_error = exc
+            logger.warning("Sync callback attempt %s failed: %s", attempt, _format_http_error(exc))
+            if attempt < runtime_settings.runner_callback_max_retries:
+                time.sleep(min(attempt * 2, 10))
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             logger.warning("Sync callback attempt %s failed: %s", attempt, exc)

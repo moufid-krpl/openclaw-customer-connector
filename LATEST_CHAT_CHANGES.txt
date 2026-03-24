@@ -1,0 +1,2 @@
+This archive was rebuilt from the latest connector repo shared in chat and updated with the code revisions discussed there.
+Updated files include app/config.py, app/runtime.py, app/callbacks.py, app/connector.py, app/winrm_client.py, scripts/run_connector.ps1, and config/*.json.
